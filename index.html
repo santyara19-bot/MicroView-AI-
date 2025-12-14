@@ -109,11 +109,17 @@
         .prose-invert p { margin-bottom: 0.6em; line-height: 1.5; font-size: 0.95em; }
         .prose-invert ul { list-style-type: disc; padding-left: 1.2em; margin-bottom: 0.6em; }
         .prose-invert strong { color: #f8fafc; font-weight: 600; }
+
+        /* Estilo para el selector de cámara */
+        select option {
+            background-color: #1e293b;
+            color: white;
+        }
     </style>
 </head>
 <body class="flex flex-col h-screen bg-slate-950">
 
-    <!-- Header Compacto -->
+    <!-- Header -->
     <header class="bg-slate-800 border-b border-slate-700 h-14 flex items-center justify-between px-4 z-30 flex-shrink-0">
         <div class="flex items-center gap-2">
             <i data-lucide="microscope" class="text-teal-400 w-6 h-6"></i>
@@ -123,7 +129,7 @@
         <div class="flex items-center gap-3">
             <div class="flex items-center gap-2 bg-slate-900 px-3 py-1.5 rounded border border-slate-700">
                 <label class="text-xs text-slate-400 hidden sm:block">Fuente:</label>
-                <select id="cameraSelect" class="bg-transparent text-white text-xs focus:outline-none w-32 cursor-pointer truncate">
+                <select id="cameraSelect" class="bg-slate-900 text-white text-xs focus:outline-none w-32 cursor-pointer truncate">
                     <option value="" disabled selected>Buscando...</option>
                 </select>
             </div>
@@ -290,6 +296,7 @@
                     <p class="text-[10px] text-slate-500 mt-2 flex items-start gap-1">
                         <i data-lucide="info" class="w-3 h-3 mt-0.5 flex-shrink-0"></i>
                         La clave se guarda localmente en tu navegador.
+                        <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-teal-400 hover:text-teal-300 underline ml-1 transition-colors">Crear API Key aquí</a>
                     </p>
                 </div>
                 <div class="flex justify-end gap-3 pt-2">
@@ -327,11 +334,9 @@
         const galleryContainer = document.getElementById('galleryContainer');
         const emptyMsg = document.getElementById('emptyGalleryMsg');
         
-        // UI Error
         const statusText = document.getElementById('statusText');
         const statusIndicator = document.getElementById('statusIndicator');
 
-        // Modales
         const aiModal = document.getElementById('aiModal');
         const settingsModal = document.getElementById('settingsModal');
         const inputApiKey = document.getElementById('inputApiKey');
@@ -340,44 +345,55 @@
         if(window.lucide) lucide.createIcons();
         if(userApiKey) inputApiKey.value = userApiKey;
 
-        // --- CÁMARA ---
-        async function initCamera() {
+        // --- CÁMARA (LÓGICA CORREGIDA PARA EVITAR CONFLICTOS) ---
+        
+        async function initApp() {
+            // 1. Iniciamos la cámara por defecto PRIMERO
+            await startCamera();
+            
+            // 2. LUEGO listamos los dispositivos
             await getCameras();
-            if (cameraSelect.options.length > 0) {
-                if(cameraSelect.options.length > 1) {
-                   cameraSelect.selectedIndex = cameraSelect.options.length - 1; 
-                }
-                startCamera(cameraSelect.value);
-            }
         }
 
         async function getCameras() {
-            cameraSelect.innerHTML = '<option disabled>Buscando...</option>';
             try {
-                await navigator.mediaDevices.getUserMedia({ video: true });
+                // Como la cámara ya está activa gracias a startCamera(), enumerateDevices tendrá etiquetas
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                
                 cameraSelect.innerHTML = '';
                 if (videoDevices.length === 0) {
                     cameraSelect.innerHTML = '<option disabled>Sin cámaras</option>';
                     return;
                 }
+                
                 videoDevices.forEach((device, index) => {
                     const option = document.createElement('option');
                     option.value = device.deviceId;
                     option.text = device.label || `Cámara ${index + 1}`;
                     cameraSelect.appendChild(option);
                 });
+
+                // Sincronizar el select con la cámara activa actual
+                if (currentStream) {
+                    const currentTrack = currentStream.getVideoTracks()[0];
+                    const currentId = currentTrack.getSettings().deviceId;
+                    if(currentId) cameraSelect.value = currentId;
+                }
+
             } catch (error) {
-                console.error(error);
-                cameraSelect.innerHTML = '<option disabled>Sin permiso</option>';
+                console.error("Error al listar dispositivos:", error);
+                cameraSelect.innerHTML = '<option disabled>Error</option>';
             }
         }
 
         async function startCamera(deviceId) {
+            // Detener el stream anterior completamente antes de pedir uno nuevo
             if (currentStream) {
                 currentStream.getTracks().forEach(track => track.stop());
+                currentStream = null;
             }
+
             const constraints = {
                 video: {
                     deviceId: deviceId ? { exact: deviceId } : undefined,
@@ -385,19 +401,23 @@
                     height: { ideal: 1080 }
                 }
             };
+
             try {
                 const stream = await navigator.mediaDevices.getUserMedia(constraints);
                 currentStream = stream;
                 videoElement.srcObject = stream;
                 
-                // Actualizar UI
                 if(statusText) statusText.innerText = "En vivo";
                 if(statusIndicator) statusIndicator.className = "w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]";
 
             } catch (error) {
-                console.error(error);
-                if(statusText) statusText.innerText = "Error";
+                console.error("Error startCamera:", error);
+                if(statusText) statusText.innerText = "Error Acceso";
                 if(statusIndicator) statusIndicator.className = "w-2.5 h-2.5 rounded-full bg-red-500";
+                
+                if (error.name === 'NotReadableError') {
+                    alert("La cámara está ocupada por otra aplicación.");
+                }
             }
         }
 
@@ -473,7 +493,6 @@
             if(!currentStream) return;
             
             if(!isRecording) {
-                // START
                 recordedChunks = [];
                 let options = { mimeType: 'video/webm;codecs=vp9' };
                 if (!MediaRecorder.isTypeSupported(options.mimeType)) options = { mimeType: 'video/webm' };
@@ -481,7 +500,7 @@
                 try {
                     mediaRecorder = new MediaRecorder(currentStream, options);
                 } catch(e) {
-                    alert("Tu navegador no soporta grabación."); return;
+                    alert("Navegador no soporta grabación."); return;
                 }
 
                 mediaRecorder.ondataavailable = e => { if(e.data.size > 0) recordedChunks.push(e.data); };
@@ -509,7 +528,6 @@
                 }, 1000);
 
             } else {
-                // STOP
                 mediaRecorder.stop();
                 isRecording = false;
                 clearInterval(recordingInterval);
@@ -556,7 +574,7 @@
             btnSave.className = "text-slate-400 hover:text-teal-400 transition text-xs flex items-center gap-1";
             btnSave.innerHTML = '<i data-lucide="download" class="w-3 h-3"></i> Guardar';
 
-            info.appendChild(document.createTextNode("")); // Spacer
+            info.appendChild(document.createTextNode("")); 
             info.appendChild(btnSave);
             
             div.appendChild(mediaEl);
@@ -639,10 +657,10 @@
             }
         }
 
-        // START
-        initCamera();
+        // INICIAR APLICACIÓN
+        initApp();
 
     </script>
 </body>
-
 </html>
+
