@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visor de Microscopio Digital + IA</title>
+    
+    <!-- Estilos y Librerías -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+    <style>
+        body { background-color: #0f172a; color: #e2e8f0; font-family: sans-serif; overflow: hidden; }
+        
+        .main-layout {
+            display: flex;
+            height: calc(100vh - 56px);
+            width: 100vw;
+        }
+
+        .sidebar {
+            width: 260px;
+            background-color: #1e293b;
+            border-color: #334155;
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            z-index: 20;
+        }
+
+        @media (max-width: 1024px) {
+            .sidebar { width: 220px; }
+            .btn-text { font-size: 0.75rem; }
+        }
+
+        .video-wrapper {
+            flex: 1;
+            background: #020617;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 8px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .video-container {
+            position: relative;
+            background: #000;
+            box-shadow: 0 0 30px rgba(0,0,0,0.6);
+            border-radius: 8px;
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border: 1px solid #334155;
+        }
+
+        video { 
+            width: 100%; 
+            height: 100%; 
+            object-fit: contain; 
+            transform-origin: center; 
+            transition: transform 0.2s; 
+        }
+
+        .video-container:fullscreen {
+            width: 100vw !important;
+            height: 100vh !important;
+            border-radius: 0;
+            border: none;
+            background: black;
+            padding: 0;
+        }
+
+        .overlay-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10;
+        }
+        
+        .grid-overlay {
+            background-image: linear-gradient(rgba(0, 255, 255, 0.1) 1px, transparent 1px),
+                              linear-gradient(90deg, rgba(0, 255, 255, 0.1) 1px, transparent 1px);
+            background-size: 50px 50px;
+            display: none;
+        }
+        .grid-overlay.active { display: block; }
+
+        .crosshair {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 40px; height: 40px; display: none; z-index: 11;
+        }
+        .crosshair.active { display: block; }
+        .crosshair::before, .crosshair::after { content: ''; position: absolute; background: rgba(255, 0, 0, 0.7); box-shadow: 0 0 4px black; }
+        .crosshair::before { width: 2px; height: 100%; left: 50%; transform: translateX(-50%); }
+        .crosshair::after { height: 2px; width: 100%; top: 50%; transform: translateY(-50%); }
+
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+        @keyframes pulse-red { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+        .recording-dot { width: 10px; height: 10px; background-color: #ef4444; border-radius: 50%; display: inline-block; animation: pulse-red 1s infinite; margin-right: 6px; }
+        
+        .prose-invert h1, .prose-invert h2, .prose-invert h3 { color: #2dd4bf; margin-top: 0.8em; margin-bottom: 0.4em; font-weight: bold; font-size: 1.1em; }
+        .prose-invert p { margin-bottom: 0.6em; line-height: 1.5; font-size: 0.95em; }
+        .prose-invert ul { list-style-type: disc; padding-left: 1.2em; margin-bottom: 0.6em; }
+        .prose-invert strong { color: #f8fafc; font-weight: 600; }
+    </style>
+</head>
+<body class="flex flex-col h-screen bg-slate-950">
+
+    <!-- Header Compacto -->
+    <header class="bg-slate-800 border-b border-slate-700 h-14 flex items-center justify-between px-4 z-30 flex-shrink-0">
+        <div class="flex items-center gap-2">
+            <i data-lucide="microscope" class="text-teal-400 w-6 h-6"></i>
+            <h1 class="text-lg font-bold text-white tracking-wide hidden sm:block">MicroView <span class="text-teal-400">AI</span></h1>
+        </div>
+        
+        <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2 bg-slate-900 px-3 py-1.5 rounded border border-slate-700">
+                <label class="text-xs text-slate-400 hidden sm:block">Fuente:</label>
+                <select id="cameraSelect" class="bg-transparent text-white text-xs focus:outline-none w-32 cursor-pointer truncate">
+                    <option value="" disabled selected>Buscando...</option>
+                </select>
+            </div>
+            <button id="btnSettings" class="text-slate-400 hover:text-white p-2 rounded hover:bg-slate-700 transition" title="Configurar API Key">
+                <i data-lucide="settings" class="w-5 h-5"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-layout">
+        
+        <!-- SIDEBAR IZQUIERDA -->
+        <aside class="sidebar border-r border-slate-700 overflow-y-auto custom-scrollbar p-3 gap-5">
+            
+            <div class="flex flex-col gap-2">
+                <h3 class="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Captura</h3>
+                <button id="btnCapture" class="flex items-center justify-center gap-2 w-full py-3 bg-teal-600 hover:bg-teal-500 text-white rounded font-bold shadow-lg shadow-teal-900/30 active:scale-95 transition-all">
+                    <i data-lucide="camera" class="w-5 h-5"></i> <span class="btn-text">FOTO</span>
+                </button>
+                <button id="btnRecord" class="flex items-center justify-center gap-2 w-full py-3 bg-slate-700 hover:bg-red-600 text-white border border-slate-600 hover:border-red-500 rounded font-bold active:scale-95 transition-all group shadow-md">
+                    <div id="recordIcon" class="w-3 h-3 bg-red-500 rounded-full group-hover:bg-white transition-colors"></div>
+                    <span id="recordText" class="btn-text">VIDEO</span>
+                </button>
+            </div>
+
+            <div class="flex flex-col gap-2">
+                <h3 class="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Inteligencia Artificial</h3>
+                <button id="btnAnalyze" class="flex items-center justify-center gap-2 w-full py-3.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded font-bold shadow-lg shadow-indigo-900/30 active:scale-95 transition-all border border-indigo-500/30">
+                    <i data-lucide="sparkles" class="w-5 h-5 text-yellow-300"></i> <span class="btn-text">IDENTIFICAR</span>
+                </button>
+            </div>
+
+            <div class="flex flex-col gap-2">
+                <h3 class="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Visualización</h3>
+                <div class="grid grid-cols-2 gap-2">
+                    <button id="btnGrid" class="flex flex-col items-center justify-center py-2 bg-slate-700 hover:bg-slate-600 rounded text-slate-300 transition border border-slate-600">
+                        <i data-lucide="grid-3x3" class="w-5 h-5 mb-1"></i>
+                        <span class="text-[10px]">Grilla</span>
+                    </button>
+                    <button id="btnCrosshair" class="flex flex-col items-center justify-center py-2 bg-slate-700 hover:bg-slate-600 rounded text-slate-300 transition border border-slate-600">
+                        <i data-lucide="crosshair" class="w-5 h-5 mb-1"></i>
+                        <span class="text-[10px]">Mira</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="flex flex-col gap-2">
+                <h3 class="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Ajustes</h3>
+                <div class="grid grid-cols-3 gap-2">
+                    <button id="btnFlipH" class="flex items-center justify-center py-2 bg-slate-700 hover:bg-slate-600 rounded text-slate-300 transition border border-slate-600" title="Espejo Horizontal"><i data-lucide="flip-horizontal" class="w-5 h-5"></i></button>
+                    <button id="btnFlipV" class="flex items-center justify-center py-2 bg-slate-700 hover:bg-slate-600 rounded text-slate-300 transition border border-slate-600" title="Espejo Vertical"><i data-lucide="flip-vertical" class="w-5 h-5"></i></button>
+                    <button id="btnReset" class="flex items-center justify-center py-2 bg-slate-700 hover:bg-slate-600 rounded text-red-400 hover:text-red-300 transition border border-slate-600" title="Resetear"><i data-lucide="rotate-ccw" class="w-5 h-5"></i></button>
+                </div>
+            </div>
+
+            <div class="mt-auto pt-2 border-t border-slate-700">
+                <button id="btnAppFullscreen" class="flex items-center justify-center gap-2 w-full py-2 text-xs text-slate-500 hover:text-teal-400 transition hover:bg-slate-800 rounded">
+                    <i data-lucide="maximize" class="w-3 h-3"></i> Pantalla Completa
+                </button>
+            </div>
+        </aside>
+
+        <!-- ÁREA CENTRAL: VIDEO -->
+        <div class="video-wrapper">
+            <div id="mainVideoContainer" class="video-container group">
+                <video id="videoFeed" autoplay playsinline muted></video>
+                <div id="gridOverlay" class="overlay-layer grid-overlay"></div>
+                <div id="crosshairOverlay" class="overlay-layer crosshair"></div>
+                
+                <!-- Status Badge -->
+                <div class="absolute top-4 left-4 bg-black/60 backdrop-blur px-3 py-1.5 rounded-full flex items-center gap-2 border border-white/10 shadow-lg pointer-events-none z-20">
+                    <span id="statusIndicator" class="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]"></span>
+                    <span id="statusText" class="text-xs text-white font-medium tracking-wide">Iniciando...</span>
+                </div>
+
+                <!-- Rec Timer -->
+                <div id="recIndicator" class="hidden absolute top-4 right-4 bg-red-600/90 backdrop-blur px-3 py-1.5 rounded-full flex items-center border border-red-400 shadow-lg animate-pulse pointer-events-none z-20">
+                    <div class="recording-dot"></div>
+                    <span id="recTimer" class="text-xs text-white font-mono font-bold tracking-widest">00:00</span>
+                </div>
+
+                <!-- Botón Solo Cámara -->
+                <button id="btnCamFullscreen" class="absolute bottom-4 right-4 p-2.5 bg-black/60 hover:bg-teal-600 text-white rounded-lg transition opacity-0 group-hover:opacity-100 backdrop-blur border border-white/10 shadow-xl transform hover:scale-105 z-20" title="Expandir Solo Video">
+                    <i data-lucide="maximize-2" class="w-5 h-5"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- SIDEBAR DERECHA: GALERÍA -->
+        <aside class="sidebar border-l border-slate-700 flex flex-col">
+            <div class="h-12 border-b border-slate-700 flex items-center justify-between px-4 bg-slate-800 flex-shrink-0">
+                <span class="text-sm font-bold text-slate-200 flex items-center gap-2">
+                    <i data-lucide="images" class="w-4 h-4 text-slate-400"></i> Galería
+                </span>
+                <button id="btnClearGallery" class="text-[10px] text-red-400 hover:text-red-300 hover:underline flex items-center gap-1">
+                    <i data-lucide="trash-2" class="w-3 h-3"></i> Limpiar
+                </button>
+            </div>
+            
+            <div id="galleryContainer" class="flex-1 overflow-y-auto p-3 space-y-3 bg-slate-900 custom-scrollbar">
+                <div id="emptyGalleryMsg" class="flex flex-col items-center justify-center py-20 text-slate-600 opacity-60">
+                    <i data-lucide="image" class="w-12 h-12 mb-3"></i>
+                    <p class="text-xs">Sin capturas</p>
+                </div>
+            </div>
+        </aside>
+
+    </main>
+
+    <!-- Modal Resultados IA -->
+    <div id="aiModal" class="fixed inset-0 bg-black/85 backdrop-blur-sm hidden z-50 flex justify-center items-center p-4">
+        <div class="bg-slate-800 w-full max-w-4xl max-h-[90vh] rounded-xl border border-slate-600 shadow-2xl flex flex-col overflow-hidden animate-fade-in-up">
+            <div class="bg-slate-900 p-4 border-b border-slate-700 flex justify-between items-center">
+                <h3 class="text-white font-bold flex items-center gap-2">
+                    <i data-lucide="sparkles" class="text-yellow-400 w-5 h-5"></i> Resultado del Análisis
+                </h3>
+                <button id="btnCloseModal" class="text-slate-400 hover:text-white p-1 hover:bg-slate-700 rounded transition"><i data-lucide="x" class="w-6 h-6"></i></button>
+            </div>
+            
+            <div class="flex-1 overflow-y-auto p-6 flex flex-col md:flex-row gap-6">
+                <div class="w-full md:w-1/3 flex-shrink-0 flex flex-col">
+                    <div class="rounded-lg overflow-hidden border border-slate-600 shadow-lg bg-black">
+                        <img id="aiAnalysisImage" src="" class="w-full h-auto object-contain">
+                    </div>
+                    <p class="text-[10px] text-center text-slate-500 mt-2 uppercase tracking-wide">Muestra Analizada</p>
+                </div>
+                
+                <div class="flex-1 text-sm text-slate-300 relative min-h-[200px]">
+                    <div id="aiLoading" class="absolute inset-0 flex flex-col items-center justify-center">
+                        <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-500 mb-4"></div>
+                        <p class="text-indigo-400 font-medium animate-pulse">Consultando a Gemini AI...</p>
+                        <p class="text-xs text-slate-500 mt-2">Analizando estructuras biológicas y electrónicas</p>
+                    </div>
+                    <div id="aiResult" class="hidden prose prose-invert prose-sm max-w-none"></div>
+                    <div id="aiError" class="hidden flex flex-col items-center justify-center h-full text-center py-4">
+                        <div class="bg-red-900/20 p-4 rounded-full mb-3">
+                            <i data-lucide="alert-circle" class="w-8 h-8 text-red-500"></i>
+                        </div>
+                        <p class="text-red-400 font-bold mb-1 text-lg">Error de Análisis</p>
+                        <p id="aiErrorMessage" class="text-xs text-slate-400 mb-6 max-w-xs mx-auto"></p>
+                        <button onclick="document.getElementById('aiModal').classList.add('hidden'); openSettings();" class="text-xs bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded font-bold border border-slate-600 transition">
+                            Configurar API Key
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Configuración -->
+    <div id="settingsModal" class="fixed inset-0 bg-black/85 backdrop-blur-sm hidden z-50 flex justify-center items-center p-4">
+        <div class="bg-slate-800 w-full max-w-md rounded-xl border border-slate-600 shadow-2xl p-6 transform transition-all scale-100">
+            <h3 class="text-lg font-bold text-white mb-6 flex items-center gap-2 border-b border-slate-700 pb-2">
+                <i data-lucide="settings" class="w-5 h-5 text-teal-400"></i> Configuración IA
+            </h3>
+            <div class="space-y-5">
+                <div>
+                    <label class="block text-xs font-bold text-slate-300 mb-1.5 uppercase tracking-wide">Google Gemini API Key</label>
+                    <div class="relative">
+                        <input type="password" id="inputApiKey" placeholder="AIzaSy..." class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-sm text-white focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 transition-all shadow-inner">
+                        <i data-lucide="key" class="absolute right-3 top-2.5 w-4 h-4 text-slate-600"></i>
+                    </div>
+                    <p class="text-[10px] text-slate-500 mt-2 flex items-start gap-1">
+                        <i data-lucide="info" class="w-3 h-3 mt-0.5 flex-shrink-0"></i>
+                        La clave se guarda localmente en tu navegador.
+                    </p>
+                </div>
+                <div class="flex justify-end gap-3 pt-2">
+                    <button id="btnCancelSettings" class="px-4 py-2 text-slate-400 hover:text-white text-xs font-medium transition hover:bg-slate-700/50 rounded">Cancelar</button>
+                    <button id="btnSaveSettings" class="px-5 py-2 bg-teal-600 hover:bg-teal-500 text-white rounded text-xs font-bold shadow-lg shadow-teal-900/50 transition transform active:scale-95">Guardar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Canvas Oculto -->
+    <canvas id="captureCanvas" class="hidden"></canvas>
+
+    <script>
+        // --- UTILIDADES ---
+        const safeStorage = {
+            getItem: (key) => { try { return localStorage.getItem(key); } catch(e) { return null; } },
+            setItem: (key, val) => { try { localStorage.setItem(key, val); } catch(e) { } }
+        };
+
+        // --- VARIABLES GLOBALES ---
+        let currentStream = null;
+        let isFlippedH = false;
+        let isFlippedV = false;
+        let isRecording = false;
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let recordingInterval = null;
+        let userApiKey = safeStorage.getItem('gemini_api_key') || "";
+
+        // --- ELEMENTOS DOM ---
+        const videoElement = document.getElementById('videoFeed');
+        const cameraSelect = document.getElementById('cameraSelect');
+        const canvas = document.getElementById('captureCanvas');
+        const galleryContainer = document.getElementById('galleryContainer');
+        const emptyMsg = document.getElementById('emptyGalleryMsg');
+        
+        // UI Error
+        const statusText = document.getElementById('statusText');
+        const statusIndicator = document.getElementById('statusIndicator');
+
+        // Modales
+        const aiModal = document.getElementById('aiModal');
+        const settingsModal = document.getElementById('settingsModal');
+        const inputApiKey = document.getElementById('inputApiKey');
+
+        // Inicializar Iconos
+        if(window.lucide) lucide.createIcons();
+        if(userApiKey) inputApiKey.value = userApiKey;
+
+        // --- CÁMARA (LÓGICA SIMPLE ORIGINAL) ---
+        async function initCamera() {
+            await getCameras();
+            if (cameraSelect.options.length > 0) {
+                if(cameraSelect.options.length > 1) {
+                   cameraSelect.selectedIndex = cameraSelect.options.length - 1; 
+                }
+                startCamera(cameraSelect.value);
+            }
+        }
+
+        async function getCameras() {
+            cameraSelect.innerHTML = '<option disabled>Buscando...</option>';
+            try {
+                await navigator.mediaDevices.getUserMedia({ video: true });
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                cameraSelect.innerHTML = '';
+                if (videoDevices.length === 0) {
+                    cameraSelect.innerHTML = '<option disabled>Sin cámaras</option>';
+                    return;
+                }
+                videoDevices.forEach((device, index) => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `Cámara ${index + 1}`;
+                    cameraSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error(error);
+                cameraSelect.innerHTML = '<option disabled>Sin permiso</option>';
+            }
+        }
+
+        async function startCamera(deviceId) {
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+            }
+            const constraints = {
+                video: {
+                    deviceId: deviceId ? { exact: deviceId } : undefined,
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 }
+                }
+            };
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                currentStream = stream;
+                videoElement.srcObject = stream;
+                
+                // Actualizar UI
+                if(statusText) statusText.innerText = "En vivo";
+                if(statusIndicator) statusIndicator.className = "w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]";
+
+            } catch (error) {
+                console.error(error);
+                if(statusText) statusText.innerText = "Error";
+                if(statusIndicator) statusIndicator.className = "w-2.5 h-2.5 rounded-full bg-red-500";
+            }
+        }
+
+        cameraSelect.addEventListener('change', (e) => startCamera(e.target.value));
+
+        // --- HERRAMIENTAS VISUALES ---
+        function updateTransform() {
+            const scaleX = isFlippedH ? -1 : 1;
+            const scaleY = isFlippedV ? -1 : 1;
+            videoElement.style.transform = `scale(${scaleX}, ${scaleY})`;
+            
+            toggleBtn('btnFlipH', isFlippedH);
+            toggleBtn('btnFlipV', isFlippedV);
+        }
+
+        function toggleBtn(id, active) {
+            const btn = document.getElementById(id);
+            if(active) {
+                btn.classList.add('text-teal-400', 'border-teal-500');
+            } else {
+                btn.classList.remove('text-teal-400', 'border-teal-500');
+            }
+        }
+
+        document.getElementById('btnFlipH').onclick = () => { isFlippedH = !isFlippedH; updateTransform(); };
+        document.getElementById('btnFlipV').onclick = () => { isFlippedV = !isFlippedV; updateTransform(); };
+        document.getElementById('btnReset').onclick = () => { isFlippedH = false; isFlippedV = false; updateTransform(); };
+
+        document.getElementById('btnGrid').onclick = function() {
+            const active = document.getElementById('gridOverlay').classList.toggle('active');
+            toggleBtn('btnGrid', active);
+        };
+
+        document.getElementById('btnCrosshair').onclick = function() {
+            const active = document.getElementById('crosshairOverlay').classList.toggle('active');
+            toggleBtn('btnCrosshair', active);
+        };
+
+        // --- FULLSCREEN ---
+        document.getElementById('btnAppFullscreen').onclick = () => {
+            !document.fullscreenElement ? document.documentElement.requestFullscreen() : document.exitFullscreen();
+        };
+        
+        document.getElementById('btnCamFullscreen').onclick = () => {
+            const container = document.getElementById('mainVideoContainer');
+            !document.fullscreenElement ? container.requestFullscreen() : document.exitFullscreen();
+        };
+
+        // --- CAPTURA ---
+        function getFrame() {
+            if (!currentStream) return null;
+            canvas.width = videoElement.videoWidth;
+            canvas.height = videoElement.videoHeight;
+            const ctx = canvas.getContext('2d');
+            
+            ctx.save();
+            ctx.translate(isFlippedH ? canvas.width : 0, isFlippedV ? canvas.height : 0);
+            ctx.scale(isFlippedH ? -1 : 1, isFlippedV ? -1 : 1);
+            ctx.drawImage(videoElement, 0, 0);
+            ctx.restore();
+            
+            return canvas.toDataURL('image/jpeg', 0.9);
+        }
+
+        document.getElementById('btnCapture').onclick = () => {
+            const img = getFrame();
+            if(img) addToGallery(img, 'image');
+        };
+
+        // --- GRABACIÓN ---
+        const btnRecord = document.getElementById('btnRecord');
+        btnRecord.onclick = () => {
+            if(!currentStream) return;
+            
+            if(!isRecording) {
+                // START
+                recordedChunks = [];
+                let options = { mimeType: 'video/webm;codecs=vp9' };
+                if (!MediaRecorder.isTypeSupported(options.mimeType)) options = { mimeType: 'video/webm' };
+
+                try {
+                    mediaRecorder = new MediaRecorder(currentStream, options);
+                } catch(e) {
+                    alert("Tu navegador no soporta grabación."); return;
+                }
+
+                mediaRecorder.ondataavailable = e => { if(e.data.size > 0) recordedChunks.push(e.data); };
+                mediaRecorder.onstop = () => {
+                    const blob = new Blob(recordedChunks, {type: 'video/webm'});
+                    const url = URL.createObjectURL(blob);
+                    addToGallery(url, 'video');
+                };
+
+                mediaRecorder.start();
+                isRecording = true;
+                
+                btnRecord.classList.remove('bg-slate-700', 'hover:bg-red-600');
+                btnRecord.classList.add('bg-red-600', 'animate-pulse');
+                document.getElementById('recordIcon').classList.add('hidden');
+                document.getElementById('recordText').innerText = "DETENER";
+                document.getElementById('recIndicator').classList.remove('hidden');
+                
+                const startTime = Date.now();
+                recordingInterval = setInterval(() => {
+                    const s = Math.floor((Date.now() - startTime)/1000);
+                    const m = Math.floor(s/60).toString().padStart(2,'0');
+                    const sec = (s%60).toString().padStart(2,'0');
+                    document.getElementById('recTimer').innerText = `${m}:${sec}`;
+                }, 1000);
+
+            } else {
+                // STOP
+                mediaRecorder.stop();
+                isRecording = false;
+                clearInterval(recordingInterval);
+                
+                btnRecord.classList.add('bg-slate-700', 'hover:bg-red-600');
+                btnRecord.classList.remove('bg-red-600', 'animate-pulse');
+                document.getElementById('recordIcon').classList.remove('hidden');
+                document.getElementById('recordText').innerText = "VIDEO";
+                document.getElementById('recIndicator').classList.add('hidden');
+            }
+        };
+
+        function addToGallery(src, type) {
+            emptyMsg.classList.add('hidden');
+            const div = document.createElement('div');
+            div.className = "bg-slate-800 p-2 rounded border border-slate-700 mb-3 group relative animate-fade-in";
+            
+            let mediaEl;
+            if(type === 'image') {
+                mediaEl = document.createElement('img');
+                mediaEl.src = src;
+                mediaEl.className = "w-full rounded bg-black border border-slate-600";
+                
+                const btnAI = document.createElement('button');
+                btnAI.className = "absolute top-3 right-3 bg-indigo-600 text-white p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition shadow-lg hover:bg-indigo-500 scale-90 hover:scale-100";
+                btnAI.innerHTML = '<i data-lucide="sparkles" class="w-3.5 h-3.5"></i>';
+                btnAI.title = "Analizar con IA";
+                btnAI.onclick = () => openAiModal(src);
+                div.appendChild(btnAI);
+                
+            } else {
+                mediaEl = document.createElement('video');
+                mediaEl.src = src;
+                mediaEl.controls = true;
+                mediaEl.className = "w-full rounded bg-black border border-slate-600";
+            }
+
+            const info = document.createElement('div');
+            info.className = "flex justify-between items-center mt-2 px-1";
+            
+            const btnSave = document.createElement('a');
+            btnSave.href = src;
+            btnSave.download = `micro_${Date.now()}.${type === 'image' ? 'jpg' : 'webm'}`;
+            btnSave.className = "text-slate-400 hover:text-teal-400 transition text-xs flex items-center gap-1";
+            btnSave.innerHTML = '<i data-lucide="download" class="w-3 h-3"></i> Guardar';
+
+            info.appendChild(document.createTextNode("")); // Spacer
+            info.appendChild(btnSave);
+            
+            div.appendChild(mediaEl);
+            div.appendChild(info);
+            galleryContainer.prepend(div);
+            lucide.createIcons();
+        }
+
+        document.getElementById('btnClearGallery').onclick = () => {
+            if(confirm('¿Borrar todas las capturas?')) {
+                galleryContainer.innerHTML = '';
+                galleryContainer.appendChild(emptyMsg);
+                emptyMsg.classList.remove('hidden');
+            }
+        };
+
+        // --- IA & SETTINGS ---
+        window.openSettings = () => settingsModal.classList.remove('hidden');
+        document.getElementById('btnSettings').onclick = openSettings;
+        document.getElementById('btnCancelSettings').onclick = () => settingsModal.classList.add('hidden');
+        document.getElementById('btnSaveSettings').onclick = () => {
+            userApiKey = inputApiKey.value.trim();
+            safeStorage.setItem('gemini_api_key', userApiKey);
+            settingsModal.classList.add('hidden');
+            alert("Clave guardada.");
+        };
+
+        document.getElementById('btnAnalyze').onclick = () => {
+            const img = getFrame();
+            if(img) openAiModal(img);
+        };
+
+        function openAiModal(base64) {
+            aiModal.classList.remove('hidden');
+            document.getElementById('aiAnalysisImage').src = base64;
+            document.getElementById('aiLoading').classList.remove('hidden');
+            document.getElementById('aiResult').classList.add('hidden');
+            document.getElementById('aiError').classList.add('hidden');
+            document.getElementById('aiResult').innerHTML = '';
+            runGemini(base64);
+        }
+
+        document.getElementById('btnCloseModal').onclick = () => aiModal.classList.add('hidden');
+
+        async function runGemini(base64) {
+            if(!userApiKey) {
+                document.getElementById('aiLoading').classList.add('hidden');
+                document.getElementById('aiError').classList.remove('hidden');
+                document.getElementById('aiErrorMessage').innerText = "Falta la API Key.";
+                return;
+            }
+
+            const prompt = "Actúa como experto en microscopía biológica y electrónica. Analiza la imagen. 1. Identifica qué es. 2. Describe estructuras clave. 3. Breve explicación técnica. Sé conciso.";
+
+            try {
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${userApiKey}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        contents: [{ parts: [ {text: prompt}, {inlineData: {mimeType: "image/jpeg", data: base64.split(',')[1]}} ] }]
+                    })
+                });
+
+                if(!res.ok) throw new Error("Error API: " + res.status);
+                const data = await res.json();
+                const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if(text) {
+                    document.getElementById('aiLoading').classList.add('hidden');
+                    const resultDiv = document.getElementById('aiResult');
+                    resultDiv.classList.remove('hidden');
+                    resultDiv.innerHTML = marked.parse(text);
+                } else {
+                    throw new Error("Sin respuesta.");
+                }
+            } catch (e) {
+                document.getElementById('aiLoading').classList.add('hidden');
+                document.getElementById('aiError').classList.remove('hidden');
+                document.getElementById('aiErrorMessage').innerText = e.message || "Error conexión";
+            }
+        }
+
+        // START
+        initCamera();
+
+    </script>
+</body>
+</html>
